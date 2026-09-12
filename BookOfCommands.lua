@@ -64,6 +64,39 @@ local BookOfCommands_MovementCommands = {
     { id = "movement.group_stay", label = "Stay", icon = "Interface\\Icons\\stay", strategy = "stay", tooltip = "Order companions in party to stay", group = true, emote = "wait", command = {[0] = "#a stay ?"}, index = 1 }
 }
 
+-- Mangosbot's ToolBarButtonOnClick has a trap for group buttons: when the
+-- button def carries a `tooltip`, it broadcasts a SECOND party command made
+-- from that tooltip ("#a "..tooltip). The native Mangosbot group buttons count
+-- on this, so their tooltips are bot commands. Our book buttons need a
+-- human-readable tooltip for hover text, so we must hand ToolBarButtonOnClick a
+-- copy WITHOUT `tooltip`; otherwise the sentence ("Order companions in party to
+-- follow you") is sent to the party and the bot server acts on it (opening a
+-- trade). This returns the def unchanged for display but safe to execute.
+local function BookOfCommands_ExecutionDef(def)
+    if not def then
+        return def
+    end
+
+    local clean = {}
+    local key, value
+    for key, value in pairs(def) do
+        -- Skip the tooltip entirely: Mangosbot would send "#a "..tooltip to the
+        -- party, which is what triggered the bot trade.
+        if key ~= "tooltip" then
+            if key == "command" and type(value) == "table" then
+                clean.command = {}
+                local ck, cv
+                for ck, cv in pairs(value) do
+                    clean.command[ck] = cv
+                end
+            else
+                clean[key] = value
+            end
+        end
+    end
+    return clean
+end
+
 -- Return a shallow copy of the movement commands (they are re-bound on every
 -- page refresh so the sockets pick up the latest command tables).
 local function BookOfCommands_GetMovementCommands()
@@ -105,7 +138,7 @@ end
 local function BookOfCommands_ExecuteCommand(id)
     local def = BookOfCommands_FindDef(id)
     if def and type(ToolBarButtonOnClick) == "function" then
-        ToolBarButtonOnClick(def, false)
+        ToolBarButtonOnClick(BookOfCommands_ExecutionDef(def), false)
     end
 end
 Forged_Mangosbot_BookOfCommandsRun = BookOfCommands_ExecuteCommand
@@ -390,7 +423,7 @@ local function BookOfCommands_CreateSocket(parent, left, top, width, height)
             return
         end
         if this.def and type(ToolBarButtonOnClick) == "function" then
-            ToolBarButtonOnClick(this.def, false)
+            ToolBarButtonOnClick(BookOfCommands_ExecutionDef(this.def), false)
         end
     end)
 
