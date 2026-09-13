@@ -15,6 +15,11 @@ end
 local nativeSpellButtonCount = 12
 local nativeSkillLineTabCount = 8
 
+-- Saved reference to Blizzard's original SpellBookFrame_Update, captured when we
+-- install our hook. Used to force a clean native re-layout when the player
+-- switches back to the Spellbook tab.
+local originalSpellBookFrame_Update = nil
+
 local spellbookTabsInstalled = false
 local nativeTabId = 0
 local bocTabId = 0
@@ -268,16 +273,50 @@ local function BookOfCommands_SetNativeSpellbookWidgetsShown(shown)
         end
     end
 
+    -- Only ever re-show the skill-line tabs that map to a real spellbook
+    -- section. Blizzard allocates a fixed pool of tab frames (1..8); the ones
+    -- beyond the real section count are empty placeholders. Blindly :Show()ing
+    -- the whole pool is what left the extra empty tabs visible after switching
+    -- back to the Spellbook tab. Ask the client how many sections really exist
+    -- and hide everything past that count.
+    local realTabCount = 0
+    if type(GetNumSpellTabs) == "function" then
+        local ok, count = pcall(GetNumSpellTabs)
+        if ok and type(count) == "number" and count > 0 then
+            realTabCount = count
+        end
+    end
+    if realTabCount == 0 and type(GetSpellTabInfo) == "function" then
+        -- Fallback: probe GetSpellTabInfo until it returns no name.
+        local index = 1
+        while index <= nativeSkillLineTabCount do
+            local name = GetSpellTabInfo(index)
+            if not name or name == "" then
+                break
+            end
+            realTabCount = index
+            index = index + 1
+        end
+    end
+
     for i = 1, nativeSkillLineTabCount do
         local tab = getglobal("SpellBookSkillLineTab" .. i)
         if tab then
-            if shown then
+            if shown and i <= realTabCount then
                 tab:Show()
             else
                 tab:Hide()
             end
         end
     end
+
+    -- NOTE: do NOT re-anchor the skill line tabs here. In the vanilla spellbook
+    -- they are VERTICAL tabs stacked down the right edge; Blizzard's
+    -- SpellBookFrame_UpdateSkillLineTabs() owns both their visibility and their
+    -- per-tab points (tab N anchored to the BOTTOM of tab N-1). Manually
+    -- chaining them here fights that layout and makes them pile up on top of
+    -- each other. Visibility is handled by the loop above; positioning is left
+    -- entirely to Blizzard's native update, which ShowNative() re-runs.
 
     local prevButton = getglobal("SpellBookPrevPageButton")
     local nextButton = getglobal("SpellBookNextPageButton")
@@ -593,6 +632,37 @@ function BookOfCommands.ShowNative()
         spellBookFrame.selectedTab = nativeTabId
         PanelTemplates_SetTab(spellBookFrame, nativeTabId)
     end
+
+    -- Re-run Blizzard's native layout so every section tab is both re-shown AND
+    -- re-positioned correctly. :Show() alone does not move a frame, and 1.12's
+    -- SpellBookFrame_UpdateSkillLineTabs() uses SetPoint() WITHOUT
+    -- ClearAllPoints(), so a tab we hid/re-showed would end up with two anchor
+    -- points and collapse on top of its neighbours. Clear the points on the
+    -- section tabs first so the native update rebuilds a clean anchor chain.
+    local i
+    for i = 1, nativeSkillLineTabCount do
+        local tab = getglobal("SpellBookSkillLineTab" .. i)
+        if tab then
+            tab:ClearAllPoints()
+        end
+    end
+
+    -- Prefer the function that owns tab visibility + points. Use the SAVED
+    -- original update (not the global, which is our hook) to avoid recursing
+    -- through our wrapper.
+    local restored = false
+    if type(SpellBookFrame_UpdateSkillLineTabs) == "function" then
+        restored = pcall(SpellBookFrame_UpdateSkillLineTabs)
+    end
+    if not restored and type(originalSpellBookFrame_Update) == "function" then
+        restored = pcall(originalSpellBookFrame_Update)
+    end
+
+    -- Blizzard's update re-turns the native widgets back on. Re-clamp the tab
+    -- pool afterwards so the empty tail (index > real section count) stays gone.
+    if restored then
+        BookOfCommands_SetNativeSpellbookWidgetsShown(true)
+    end
 end
 
 function BookOfCommands.ShowBookOfCommands()
@@ -698,9 +768,9 @@ function BookOfCommands.SetupSpellbookTabs()
     end
 
     if type(SpellBookFrame_Update) == "function" and not spellbookUpdateHooked then
-        local originalUpdate = SpellBookFrame_Update
+        originalSpellBookFrame_Update = SpellBookFrame_Update
         SpellBookFrame_Update = function()
-            originalUpdate()
+            originalSpellBookFrame_Update()
             if spellBookFrame.selectedTab == bocTabId then
                 BookOfCommands_SetNativeSpellbookWidgetsShown(false)
                 if bocFrame then

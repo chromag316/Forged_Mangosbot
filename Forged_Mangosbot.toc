@@ -2,7 +2,7 @@
 ## Title: |cfff07d30Forged|r Mangosbot
 ## Notes: Spellbook-style command window and drag-to-actionbar UI for Mangosbot
 ## Author: Copilot
-## Version: 0.1.0
+## Version: 0.1.2
 ## Dependencies: Mangosbot
 ## SavedVariables: Forged_MangosbotMacroDB
 ## Website: https://forgedworlds.com
